@@ -13,7 +13,7 @@ from ui.settings_tab import SettingsTab
 
 # Workers
 from core.worker_pdf import PDFEncryptWorker
-from core.worker_email import EmailSendWorker   # UPDATED worker
+from core.worker_email import EmailSendWorker
 
 import pythoncom
 import win32com.client as win32
@@ -22,15 +22,13 @@ import win32com.client as win32
 # =====================================================================
 # MAIN APPLICATION WINDOW
 # =====================================================================
-
 class MainWindow(QMainWindow):
     def __init__(self):
         super().__init__()
 
-        self.setWindowTitle("SecurePDF Mailer - rikucat")
+        self.setWindowTitle("PDF Security Suite v3")
         self.resize(1000, 650)
 
-        # Tabs
         self.tabs = QTabWidget()
         self.encrypt_tab = QWidget()
         self.email_tab = QWidget()
@@ -45,7 +43,6 @@ class MainWindow(QMainWindow):
 
         self.setCentralWidget(self.tabs)
 
-        # Apply theme last
         apply_modern_theme(self)
 
     # =================================================================
@@ -54,7 +51,6 @@ class MainWindow(QMainWindow):
     def init_encrypt_tab(self):
         layout = QVBoxLayout(self.encrypt_tab)
 
-        # Folder selectors
         folder_row = QHBoxLayout()
 
         self.input_entry = QLineEdit()
@@ -72,17 +68,14 @@ class MainWindow(QMainWindow):
         folder_row.addWidget(self.output_entry)
         folder_row.addWidget(btn_output)
 
-        # Start button
         self.start_pdf_btn = QPushButton("🚀 Encrypt PDFs")
         self.start_pdf_btn.setObjectName("startButton")
         self.start_pdf_btn.clicked.connect(self.start_encryption)
 
-        # Progress & Log
         self.pdf_progress = QProgressBar()
         self.pdf_log = QTextEdit()
         self.pdf_log.setReadOnly(True)
 
-        # Layout add
         layout.addLayout(folder_row)
         layout.addWidget(self.start_pdf_btn)
         layout.addWidget(self.pdf_progress)
@@ -110,7 +103,6 @@ class MainWindow(QMainWindow):
 
         self.start_pdf_btn.setEnabled(False)
 
-        # Thread
         self.thread = QThread()
         self.worker = PDFEncryptWorker(input_folder, output_folder, pdf_rules)
         self.worker.moveToThread(self.thread)
@@ -133,7 +125,7 @@ class MainWindow(QMainWindow):
         self.outlook = win32.Dispatch("Outlook.Application")
         self.accounts = self.outlook.Session.Accounts
 
-        # Account selector
+        # Account selector (main account)
         self.account_box = QComboBox()
         self.account_map = {}
 
@@ -142,30 +134,32 @@ class MainWindow(QMainWindow):
                 self.account_box.addItem(acc.SmtpAddress)
                 self.account_map[acc.SmtpAddress] = acc
 
-        # Subject / Body
+        # Delegated mailbox sender
+        self.from_address_input = QLineEdit()
+        self.from_address_input.setPlaceholderText("Send on behalf of (optional: delegated mailbox email)")
+
         self.subject_input = QLineEdit()
         self.subject_input.setPlaceholderText("Email subject...")
 
         self.body_input = QTextEdit()
         self.body_input.setPlaceholderText("Email body...")
 
-        # Folder selection
         self.email_folder_btn = QPushButton("Select Attachment Folder")
         self.email_folder_btn.clicked.connect(self.select_email_folder)
         self.email_folder = None
 
-        # Send button
         self.send_email_btn = QPushButton("Send Emails")
         self.send_email_btn.clicked.connect(self.start_email_sending)
 
-        # Progress + Log
         self.email_progress = QProgressBar()
         self.email_log = QTextEdit()
         self.email_log.setReadOnly(True)
 
-        # Layout organization
-        layout.addWidget(QLabel("Send From"))
+        layout.addWidget(QLabel("Send From (Main Account)"))
         layout.addWidget(self.account_box)
+
+        layout.addWidget(QLabel("Send On Behalf (Delegated Mailbox)"))
+        layout.addWidget(self.from_address_input)
 
         layout.addWidget(QLabel("Subject"))
         layout.addWidget(self.subject_input)
@@ -198,23 +192,21 @@ class MainWindow(QMainWindow):
             self.email_log.append("⚠ No folder selected.")
             return
 
-        # Store for use in UI COM thread
         self.account = self.account_map[self.account_box.currentText()]
+        self.from_address = self.from_address_input.text().strip()
         self.subject = self.subject_input.text().strip()
         self.body = self.body_input.toPlainText()
 
         self.send_email_btn.setEnabled(False)
 
-        # Worker + Thread
+        # Worker thread (no Outlook COM inside worker)
         self.email_thread = QThread()
         self.email_worker = EmailSendWorker(self.email_folder, email_rules, delay=1)
         self.email_worker.moveToThread(self.email_thread)
 
-        # Worker emits send_next → UI sends email
         self.email_worker.send_next.connect(self.send_email_ui)
         self.email_worker.log.connect(self.email_log.append)
         self.email_worker.progress.connect(self.email_progress.setValue)
-
         self.email_worker.finished.connect(self.email_thread.quit)
         self.email_worker.finished.connect(lambda: self.send_email_btn.setEnabled(True))
 
@@ -231,7 +223,20 @@ class MainWindow(QMainWindow):
 
         try:
             mail = self.outlook.CreateItem(0)
-            mail.SendUsingAccount = self.account
+
+            # Select main account always (delegates won't appear in Accounts)
+            send_acc = self.account
+            mail.SendUsingAccount = send_acc
+
+            # If user typed a delegated email → send on behalf
+            if self.from_address.strip():
+                mail.SentOnBehalfOfName = self.from_address.strip()
+
+            mail.SendUsingAccount = send_acc
+
+            # Send on behalf formatting (Outlook handles this automatically)
+            if self.from_address.strip():
+                mail.SentOnBehalfOfName = self.from_address.strip()
 
             mail.To = matched_email
             mail.Subject = self.subject
@@ -248,7 +253,6 @@ class MainWindow(QMainWindow):
 # =====================================================================
 # RUN APPLICATION
 # =====================================================================
-
 if __name__ == "__main__":
     app = QApplication(sys.argv)
     window = MainWindow()
