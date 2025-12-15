@@ -20,7 +20,7 @@ python -m nuitka ^
     --standalone ^
     --onefile ^
     --windows-console-mode=disable ^
-    --windows-icon-from-ico=icon.ico ^
+    --windows-icon-from-ico=%ICON% ^
     --enable-plugin=pyside6 ^
     --include-data-dir=config=config ^
     --include-package=core ^
@@ -28,9 +28,6 @@ python -m nuitka ^
     --include-package=msal ^
     --include-package=msal_extensions ^
     --include-package=requests ^
-    --include-package=base64 ^
-    --include-package=re ^
-    --follow-imports ^
     --output-dir=dist ^
     main.py
 

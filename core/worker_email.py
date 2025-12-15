@@ -1,4 +1,6 @@
+import json
 import os
+import sys
 import time
 import base64
 import re
@@ -10,13 +12,49 @@ from msal_extensions import FilePersistence, PersistedTokenCache
 from core.rule_matcher import rule_matches
 
 
-# ================= CONFIG =================
-CLIENT_ID = "e7b6514d-ddb7-4168-8657-f494764717d1"
-TENANT_ID = "8e3c1050-7050-4298-9bd3-fe83c3ad5673"
+# -----------------------------------------
+# Load MSAL config from config/msal.json
+# -----------------------------------------
+def load_msal_config():
+    if getattr(sys, "frozen", False):
+        # Nuitka onefile runtime
+        base_dir = os.path.dirname(sys.executable)
+    else:
+        # Source run
+        base_dir = os.path.dirname(
+            os.path.dirname(os.path.abspath(__file__))
+        )
+
+    config_path = os.path.join(base_dir, "config", "msal.json")
+
+    if not os.path.exists(config_path):
+        raise RuntimeError(
+            f"Missing MSAL config: {config_path}"
+        )
+
+    with open(config_path, "r", encoding="utf-8") as f:
+        data = json.load(f)
+
+    return data
+
+
+msal_cfg = load_msal_config()
+
+CLIENT_ID = msal_cfg.get("client_id")
+TENANT_ID = msal_cfg.get("tenant_id")
+SCOPES = msal_cfg.get("scopes", [])
+
+if not CLIENT_ID or not TENANT_ID or not SCOPES:
+    raise RuntimeError(
+        "Invalid MSAL config in config/msal.json"
+    )
+
+
 AUTHORITY = f"https://login.microsoftonline.com/{TENANT_ID}"
-SCOPES = ["Mail.Send"]
 CACHE_FILE = "msal_cache.bin"
 GRAPH_SENDMAIL = "https://graph.microsoft.com/v1.0/me/sendMail"
+
+
 # ==========================================
 
 
