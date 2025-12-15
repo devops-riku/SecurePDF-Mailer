@@ -3,21 +3,17 @@ import os
 from PySide6.QtWidgets import (
     QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
     QLabel, QPushButton, QTextEdit, QLineEdit, QFileDialog,
-    QProgressBar, QTabWidget, QComboBox
+    QProgressBar, QTabWidget
 )
 from PySide6.QtCore import QThread
-from ui.rich_text_editor import RichTextEditor
 
-# UI Modules
+from ui.rich_text_editor import RichTextEditor
 from ui.theme import apply_modern_theme
 from ui.settings_tab import SettingsTab
 
 # Workers
 from core.worker_pdf import PDFEncryptWorker
 from core.worker_email import EmailSendWorker
-
-import pythoncom
-import win32com.client as win32
 
 
 class MainWindow(QMainWindow):
@@ -99,38 +95,34 @@ class MainWindow(QMainWindow):
 
         self.start_pdf_btn.setEnabled(False)
 
-        self.thread = QThread()
-        self.worker = PDFEncryptWorker(input_folder, output_folder, pdf_rules)
-        self.worker.moveToThread(self.thread)
+        self.pdf_thread = QThread()
+        self.pdf_worker = PDFEncryptWorker(
+            input_folder,
+            output_folder,
+            pdf_rules
+        )
+        self.pdf_worker.moveToThread(self.pdf_thread)
 
-        self.thread.started.connect(self.worker.run)
-        self.worker.log.connect(self.pdf_log.append)
-        self.worker.progress.connect(self.pdf_progress.setValue)
-        self.worker.finished.connect(self.thread.quit)
-        self.worker.finished.connect(lambda: self.start_pdf_btn.setEnabled(True))
+        self.pdf_thread.started.connect(self.pdf_worker.run)
+        self.pdf_worker.log.connect(self.pdf_log.append)
+        self.pdf_worker.progress.connect(self.pdf_progress.setValue)
+        self.pdf_worker.finished.connect(self.pdf_thread.quit)
+        self.pdf_worker.finished.connect(
+            lambda: self.start_pdf_btn.setEnabled(True)
+        )
 
-        self.thread.start()
+        self.pdf_thread.start()
 
     # =================================================================
-    # TAB 2 — EMAIL SENDER
+    # TAB 2 — EMAIL SENDER (MSAL + GRAPH)
     # =================================================================
     def init_email_tab(self):
         layout = QVBoxLayout(self.email_tab)
 
-        pythoncom.CoInitialize()
-        self.outlook = win32.Dispatch("Outlook.Application")
-        self.accounts = self.outlook.Session.Accounts
-
-        self.account_box = QComboBox()
-        self.account_map = {}
-
-        for acc in self.accounts:
-            if acc.SmtpAddress:
-                self.account_box.addItem(acc.SmtpAddress)
-                self.account_map[acc.SmtpAddress] = acc
-
         self.from_address_input = QLineEdit()
-        self.from_address_input.setPlaceholderText("Send on behalf of (delegated mailbox)")
+        self.from_address_input.setPlaceholderText(
+            "Send on behalf of (delegated mailbox)"
+        )
 
         self.subject_input = QLineEdit()
         self.subject_input.setPlaceholderText("Email subject...")
@@ -148,9 +140,6 @@ class MainWindow(QMainWindow):
         self.email_log = QTextEdit()
         self.email_log.setReadOnly(True)
 
-        layout.addWidget(QLabel("Send From"))
-        layout.addWidget(self.account_box)
-
         layout.addWidget(QLabel("Send On Behalf Of"))
         layout.addWidget(self.from_address_input)
 
@@ -167,7 +156,9 @@ class MainWindow(QMainWindow):
         layout.addWidget(self.email_log)
 
     def select_email_folder(self):
-        folder = QFileDialog.getExistingDirectory(self, "Select Attachment Folder")
+        folder = QFileDialog.getExistingDirectory(
+            self, "Select Attachment Folder"
+        )
         if folder:
             self.email_folder = folder
             self.email_folder_btn.setText(folder)
@@ -183,50 +174,39 @@ class MainWindow(QMainWindow):
             self.email_log.append("⚠ No folder selected.")
             return
 
-        self.account = self.account_map[self.account_box.currentText()]
-        self.from_address = self.from_address_input.text().strip()
-        self.subject = self.subject_input.text().strip()
+        subject = self.subject_input.text().strip()
+        if not subject:
+            self.email_log.append("⚠ Subject is required.")
+            return
 
-        # ⭐ Now Outlook gets beautiful Calibri HTML
-        self.body_html = self.body_input.get_outlook_html()
+        from_address = self.from_address_input.text().strip()
+        body_html = self.body_input.get_outlook_html()
 
         self.send_email_btn.setEnabled(False)
 
         self.email_thread = QThread()
-        self.email_worker = EmailSendWorker(self.email_folder, email_rules, delay=1)
+        self.email_worker = EmailSendWorker(
+            self.email_folder,
+            email_rules,
+            delay=1
+        )
+
+        # Pass data to worker
+        self.email_worker.from_account = from_address or None
+        self.email_worker.subject = subject
+        self.email_worker.body = body_html
+
         self.email_worker.moveToThread(self.email_thread)
 
-        self.email_worker.send_next.connect(self.send_email_ui)
         self.email_worker.log.connect(self.email_log.append)
         self.email_worker.progress.connect(self.email_progress.setValue)
         self.email_worker.finished.connect(self.email_thread.quit)
-        self.email_worker.finished.connect(lambda: self.send_email_btn.setEnabled(True))
+        self.email_worker.finished.connect(
+            lambda: self.send_email_btn.setEnabled(True)
+        )
 
         self.email_thread.started.connect(self.email_worker.run)
         self.email_thread.start()
-
-    def send_email_ui(self, filename, matched_email):
-        if not matched_email:
-            self.email_log.append(f"⏭ Skipped: {filename}")
-            return
-
-        try:
-            mail = self.outlook.CreateItem(0)
-            mail.SendUsingAccount = self.account
-
-            if self.from_address:
-                mail.SentOnBehalfOfName = self.from_address
-
-            mail.To = matched_email
-            mail.Subject = self.subject
-            mail.HTMLBody = self.body_html
-            mail.Attachments.Add(os.path.join(self.email_folder, filename))
-            mail.Send()
-
-            self.email_log.append(f"✔ Sent → {matched_email} ({filename})")
-
-        except Exception as e:
-            self.email_log.append(f"❌ Failed: {filename}: {e}")
 
 
 if __name__ == "__main__":

@@ -182,3 +182,4 @@ cython_debug/
 
 /config/*.json
 *idea
+*.bin
